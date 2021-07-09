@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mitchellh/mapstructure"
+	datagovin "github.com/zeu5/visualizations/models/data.gov.in"
 	"github.com/zeu5/visualizations/util"
 )
 
@@ -54,7 +55,7 @@ type response struct {
 	Count   int                      `json:"count"`
 }
 
-func (r *requests) FetchCatalogs() ([]*Catalog, error) {
+func (r *requests) FetchCatalogs() ([]*datagovin.Catalog, error) {
 
 	query := make(url.Values)
 	query.Add("format", "json")
@@ -64,7 +65,7 @@ func (r *requests) FetchCatalogs() ([]*Catalog, error) {
 	query.Add("query", "Crime in India")
 	request, err := http.NewRequest("GET", CatalogURL+"/?"+query.Encode(), nil)
 	if err != nil {
-		return []*Catalog{}, err
+		return []*datagovin.Catalog{}, err
 	}
 
 	reqRes, err := r.network.Do(request)
@@ -76,19 +77,19 @@ func (r *requests) FetchCatalogs() ([]*Catalog, error) {
 		defer resp.Body.Close()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return []*Catalog{}, fmt.Errorf("could not read response: %s", err.Error())
+			return []*datagovin.Catalog{}, fmt.Errorf("could not read response: %s", err.Error())
 		}
 		var respS response
 		err = json.Unmarshal(body, &respS)
 		if err != nil {
-			return []*Catalog{}, fmt.Errorf("could not parse response: %s", err.Error())
+			return []*datagovin.Catalog{}, fmt.Errorf("could not parse response: %s", err.Error())
 		}
 		if respS.Status != "ok" {
-			return []*Catalog{}, errors.New("response status not ok")
+			return []*datagovin.Catalog{}, errors.New("response status not ok")
 		}
 		return parseCatalogs(respS.Records)
 	case err := <-reqRes.Error:
-		return []*Catalog{}, err
+		return []*datagovin.Catalog{}, err
 	}
 }
 
@@ -101,8 +102,8 @@ type catalogRecord struct {
 	Rest        map[string]interface{} `mapstructure:",remain"`
 }
 
-func parseCatalogs(records []map[string]interface{}) ([]*Catalog, error) {
-	catalogs := make([]*Catalog, 0)
+func parseCatalogs(records []map[string]interface{}) ([]*datagovin.Catalog, error) {
+	catalogs := make([]*datagovin.Catalog, 0)
 	for _, record := range records {
 		var r catalogRecord
 		err := mapstructure.Decode(record, &r)
@@ -112,7 +113,7 @@ func parseCatalogs(records []map[string]interface{}) ([]*Catalog, error) {
 		createdI, _ := strconv.ParseInt(r.Created, 10, 64)
 		lastModifiedI, _ := strconv.ParseInt(r.Changed, 10, 64)
 
-		catalogs = append(catalogs, &Catalog{
+		catalogs = append(catalogs, &datagovin.Catalog{
 			Title:        r.Title,
 			Created:      time.Unix(createdI, 0),
 			LastModified: time.Unix(lastModifiedI, 0),
@@ -125,7 +126,7 @@ func parseCatalogs(records []map[string]interface{}) ([]*Catalog, error) {
 	return catalogs, nil
 }
 
-func (r *requests) FetchCatalogInfo(c *Catalog) ([]*Dataset, error) {
+func (r *requests) FetchCatalogInfo(c *datagovin.Catalog) ([]*datagovin.Dataset, error) {
 	query := make(url.Values)
 	query.Set("filters[field_catalog_reference]", strconv.FormatUint(c.CatID, 10))
 	query.Set("format", "json")
@@ -142,24 +143,24 @@ func (r *requests) FetchCatalogInfo(c *Catalog) ([]*Dataset, error) {
 
 		request, err := http.NewRequest("GET", DatasetURL+"/?"+query.Encode(), nil)
 		if err != nil {
-			return []*Dataset{}, err
+			return []*datagovin.Dataset{}, err
 		}
 		reqRes, err := r.network.Do(request)
 		if err != nil {
-			return []*Dataset{}, err
+			return []*datagovin.Dataset{}, err
 		}
 		select {
 		case resp := <-reqRes.Response:
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				resp.Body.Close()
-				return []*Dataset{}, fmt.Errorf("failed to read response body: %s", err.Error())
+				return []*datagovin.Dataset{}, fmt.Errorf("failed to read response body: %s", err.Error())
 			}
 			rS := new(response)
 			err = json.Unmarshal(body, rS)
 			if err != nil {
 				resp.Body.Close()
-				return []*Dataset{}, fmt.Errorf("failed to parse response body: %s", err.Error())
+				return []*datagovin.Dataset{}, fmt.Errorf("failed to parse response body: %s", err.Error())
 			}
 			responses = append(responses, rS)
 			totLen = rS.Total
@@ -169,7 +170,7 @@ func (r *requests) FetchCatalogInfo(c *Catalog) ([]*Dataset, error) {
 			query.Set("limit", strconv.Itoa(totLen))
 			resp.Body.Close()
 		case err := <-reqRes.Error:
-			return []*Dataset{}, err
+			return []*datagovin.Dataset{}, err
 		}
 	}
 	datasetRecords := make([]map[string]interface{}, 0)
@@ -187,8 +188,8 @@ type datasetRecord struct {
 	Rest    map[string]interface{} `mapstructure:",remain"`
 }
 
-func parseDatasets(c *Catalog, records []map[string]interface{}) ([]*Dataset, error) {
-	datasets := make([]*Dataset, 0)
+func parseDatasets(c *datagovin.Catalog, records []map[string]interface{}) ([]*datagovin.Dataset, error) {
+	datasets := make([]*datagovin.Dataset, 0)
 	for _, record := range records {
 		var r datasetRecord
 		err := mapstructure.Decode(record, &r)
@@ -198,7 +199,7 @@ func parseDatasets(c *Catalog, records []map[string]interface{}) ([]*Dataset, er
 		createdI, _ := strconv.ParseInt(r.Created, 10, 64)
 		lastModifiedI, _ := strconv.ParseInt(r.Changed, 10, 64)
 
-		datasets = append(datasets, &Dataset{
+		datasets = append(datasets, &datagovin.Dataset{
 			DID:          r.ID,
 			CatID:        c.CatID,
 			Created:      time.Unix(createdI, 0),
@@ -213,7 +214,7 @@ func parseDatasets(c *Catalog, records []map[string]interface{}) ([]*Dataset, er
 type dataRequestGroup struct {
 	token   string
 	data    []byte
-	dataset *Dataset
+	dataset *datagovin.Dataset
 }
 
 type dataResponse struct {
@@ -262,7 +263,7 @@ func (d *dataRequestGroup) Next(resp *http.Response) *http.Request {
 	return nil
 }
 
-func (r *requests) FetchData(d *Dataset) (*Data, error) {
+func (r *requests) FetchData(d *datagovin.Dataset) (*datagovin.Data, error) {
 	reqGroup := &dataRequestGroup{
 		token:   "",
 		data:    []byte{},
@@ -282,7 +283,7 @@ func (r *requests) FetchData(d *Dataset) (*Data, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshall data: %s", err)
 		}
-		return &Data{
+		return &datagovin.Data{
 			Fields:  dataResp.Fields,
 			Entries: dataResp.Data,
 		}, nil

@@ -1,44 +1,50 @@
 package datagovin
 
 import (
+	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path"
 	"sync"
 
 	"github.com/gosuri/uilive"
-	"github.com/spf13/cobra"
+	datagovin "github.com/zeu5/visualizations/models/data.gov.in"
 	"github.com/zeu5/visualizations/util"
 )
 
 var (
-	dbURL string
+	dbURL    string
+	dumpPath string
 )
 
 type datasetColl struct {
-	datasets []*Dataset
+	datasets []*datagovin.Dataset
 	lock     *sync.Mutex
 }
 
 func newDatasetColl() *datasetColl {
 	return &datasetColl{
-		datasets: make([]*Dataset, 0),
+		datasets: make([]*datagovin.Dataset, 0),
 		lock:     new(sync.Mutex),
 	}
 }
 
-func (d *datasetColl) Insert(dSet *Dataset) {
+func (d *datasetColl) Insert(dSet *datagovin.Dataset) {
 	d.lock.Lock()
 	d.datasets = append(d.datasets, dSet)
 	d.lock.Unlock()
 }
 
-func (d *datasetColl) Append(dColl ...*Dataset) {
+func (d *datasetColl) Append(dColl ...*datagovin.Dataset) {
 	d.lock.Lock()
 	d.datasets = append(d.datasets, dColl...)
 	d.lock.Unlock()
 }
 
-func (d *datasetColl) Iter() []*Dataset {
+func (d *datasetColl) Iter() []*datagovin.Dataset {
 	d.lock.Lock()
 	i := d.datasets
 	d.lock.Unlock()
@@ -73,7 +79,7 @@ func (p *progress) AddFailedDat() {
 	p.failedDat = p.failedDat + 1
 }
 
-func Run() {
+func Fetch() {
 	fmt.Println("Initializing...")
 	writer := uilive.New()
 	requests := newRequests()
@@ -84,7 +90,7 @@ func Run() {
 	writer.Start()
 	requests.Start()
 
-	err := InitializeDB()
+	err := InitializeDB(dbURL)
 	if err != nil {
 		log.Fatalf("Could not initialize to database: %s\n", err)
 	}
@@ -110,7 +116,7 @@ func Run() {
 	wg := util.NewCountableWaitGroup()
 	wg.Add(newCatLen)
 	for _, c := range newCatalgos {
-		go func(cat *Catalog) {
+		go func(cat *datagovin.Catalog) {
 			err := SaveCatalog(cat)
 			if err == nil {
 				existingDatasets, err := GetCatalogInfo(cat)
@@ -143,7 +149,7 @@ func Run() {
 	writer.Start()
 	wg.Add(newDatasetsSize)
 	for _, d := range newDatasets.Iter() {
-		go func(dat *Dataset) {
+		go func(dat *datagovin.Dataset) {
 			data, err := requests.FetchData(dat)
 			if err == nil {
 				dat.Data = *data
@@ -166,14 +172,70 @@ func Run() {
 	fmt.Println("Completed!")
 }
 
-func CrimeCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "crime",
-		Short: "Fetch Crime records from data.gov.in",
-		Run: func(cmd *cobra.Command, args []string) {
-			Run()
-		},
+func createFiles() (*os.File, error) {
+	dir, err := os.Stat(dumpPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			err := os.Mkdir(dumpPath, os.ModePerm)
+			if err != nil {
+				return nil, fmt.Errorf("could not create dump dir: %s", err)
+			}
+			dir, _ = os.Stat(dumpPath)
+		} else {
+			return nil, fmt.Errorf("could not read path: %s", err)
+		}
 	}
-	cmd.PersistentFlags().StringVar(&dbURL, "Mongo db url", "mondogdb://localhost:27017", "MongoDB URI")
-	return cmd
+	if !dir.IsDir() {
+		return nil, errors.New("path is not a directory")
+	}
+	file, err := os.Create(path.Join(dumpPath, "data.json"))
+	if err != nil {
+		return nil, fmt.Errorf("could not create dump file: %s", err)
+	}
+	return file, nil
+}
+
+func Dump() {
+	fmt.Println("Initializing...")
+	dumpFile, err := createFiles()
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+	writer := bufio.NewWriter(dumpFile)
+
+	err = InitializeDB(dbURL)
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	fmt.Println("Fetching data...")
+	data := make(map[string]interface{})
+	catalogs, err := GetAllCatalog()
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+	data["catalogs"] = catalogs
+	datasets := make([]*datagovin.Dataset, 0)
+
+	for _, c := range catalogs {
+		ds, err := GetCatalogInfo(c)
+		if err != nil {
+			continue
+		}
+		datasets = append(datasets, ds...)
+	}
+	data["datasets"] = datasets
+
+	fmt.Println("Writing data...")
+	dataS, err := json.Marshal(&data)
+	if err != nil {
+		log.Fatalln("Failed to marshall data")
+	}
+	_, err = writer.Write(dataS)
+	if err != nil {
+		log.Fatalln("Failed to write data to file")
+	}
+	writer.Flush()
+	dumpFile.Close()
+	fmt.Println("Completed!")
 }
